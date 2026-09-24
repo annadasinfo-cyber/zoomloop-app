@@ -2,11 +2,582 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Zoomloop</title>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.js"></script>
+<style>
+  :root{--bg:#0e0c10;--panel:#17141b;--line:#2c2633;--txt:#d9d2c4;--dim:#8b8392;--acc:#b8452f;--acc2:#d9a441}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:14px/1.4 Georgia,"Times New Roman",serif}
+  #app{display:grid;grid-template-columns:190px 1fr 270px;grid-template-rows:1fr auto;height:100vh}
+  #list{grid-column:1;grid-row:1/3;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:10px}
+  #stage{grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:center;padding:14px;min-height:0;min-width:0;position:relative}
+  #cv{max-width:100%;max-height:100%;background:#000;cursor:grab;box-shadow:0 0 40px #000}
+  #cv.drag{cursor:grabbing}
+  #hint{position:absolute;color:var(--dim);text-align:center;pointer-events:none;font-style:italic;font-size:17px}
+  #bar{grid-column:2;grid-row:2;display:flex;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid var(--line);background:var(--panel)}
+  #bar input[type=range]{flex:1}
+  #side{grid-column:3;grid-row:1/3;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:12px}
+  h2{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--acc2);margin:16px 0 8px;font-weight:normal}
+  h2:first-child{margin-top:0}
+  label{display:block;margin:8px 0 2px;color:var(--dim);font-size:12px}
+  label b{color:var(--txt);font-weight:normal;float:right}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  select,button,input[type=number]{background:#0e0c10;color:var(--txt);border:1px solid var(--line);padding:6px 8px;font:inherit;border-radius:3px}
+  select,input[type=number]{width:100%}
+  button{cursor:pointer}
+  button:hover{border-color:var(--acc2)}
+  button.big{width:100%;padding:10px;background:var(--acc);border-color:var(--acc);color:#fff;margin-top:10px}
+  button.big:disabled{opacity:.5;cursor:default}
+  .th{display:flex;gap:6px;align-items:center;padding:5px;border:1px solid transparent;border-radius:4px;margin-bottom:4px;cursor:pointer}
+  .th.sel{border-color:var(--acc);background:#211a22}
+  .th canvas{width:80px;flex:none;display:block}
+  .th .n{color:var(--dim);font-size:11px;width:16px;text-align:right}
+  .th .bt{display:flex;flex-direction:column;gap:2px;margin-left:auto}
+  .th .bt button{padding:0 5px;font-size:10px;line-height:15px}
+  #add{width:100%;margin-bottom:10px}
+  .row{display:flex;gap:6px;align-items:center}
+  .row input[type=checkbox]{accent-color:var(--acc)}
+  #prog{height:6px;background:#0e0c10;border:1px solid var(--line);margin-top:8px;display:none}
+  #prog i{display:block;height:100%;width:0;background:var(--acc2)}
+  #msg{color:var(--dim);font-size:12px;margin-top:6px;min-height:1.4em}
+  #pair,#cpair{color:var(--txt);font-size:13px;margin-bottom:4px}
+  #cprev{width:100%;display:block;margin:4px 0;cursor:grab;touch-action:none}
+</style>
 </head>
-<body style="margin:0;background:#0e0c10">
-<div id="root"></div>
-<script type="module" src="/src/main.jsx"></script>
+<body>
+<div id="app">
+  <div id="list">
+    <button id="add">+ Bilder laden</button>
+    <input id="file" type="file" accept="image/*" multiple hidden>
+    <div id="thumbs"></div>
+  </div>
+  <div id="stage">
+    <canvas id="cv" width="1280" height="720"></canvas>
+    <div id="hint">Bilder laden oder hier reinziehen</div>
+  </div>
+  <div id="side">
+    <h2>Ausschnitt</h2>
+    <div id="cpair">&ndash;</div>
+    <canvas id="cprev" width="246" height="60"></canvas>
+    <label>Verschieben <b id="v_pan"></b></label><input type="range" id="pan" min="-100" max="100" step="1" value="0">
+    <h2>Einsetzen</h2>
+    <div id="pair">&ndash;</div>
+    <label>Gr&ouml;&szlig;e <b id="v_s"></b></label><input type="range" id="s" min="8" max="70" step="0.5">
+    <label>Drehung <b id="v_r"></b></label><input type="range" id="r" min="-180" max="180" step="1">
+    <label>Weicher Rand <b id="v_feather"></b></label><input type="range" id="feather" min="0" max="30" step="1">
+    <label>Form</label><select id="shape"><option value="rect">Rechteck</option><option value="oval">Oval</option></select>
+    <h2>Angleichen</h2>
+    <label>Helligkeit <b id="v_br"></b></label><input type="range" id="br" min="40" max="160" step="1">
+    <label>Kontrast <b id="v_co"></b></label><input type="range" id="co" min="40" max="160" step="1">
+    <label>S&auml;ttigung <b id="v_sa"></b></label><input type="range" id="sa" min="0" max="200" step="1">
+    <label>Farbton <b id="v_hu"></b></label><input type="range" id="hu" min="-180" max="180" step="1">
+    <div class="row" style="margin-top:10px"><button id="reset">zur&uuml;cksetzen</button>
+      <label class="row" style="margin:0 0 0 auto"><input type="checkbox" id="frame" checked> Rahmen</label></div>
+    <h2>Film</h2>
+    <label>Format</label>
+    <select id="fmt"><option value="1920x1080">1920 &times; 1080 &ndash; quer</option><option value="3840x2160">3840 &times; 2160 &ndash; quer 4K</option><option value="1080x1920">1080 &times; 1920 &ndash; hoch (Shorts/Reels)</option><option value="2160x3840">2160 &times; 3840 &ndash; hoch 4K</option><option value="1080x1080">1080 &times; 1080 &ndash; quadratisch</option></select>
+    <label>Sekunden pro Bild <b id="v_sec"></b></label><input type="range" id="sec" min="1.5" max="20" step="0.5">
+    <label>Atempause bei jedem Bild <b id="v_ease"></b></label><input type="range" id="ease" min="0" max="100" step="5">
+    <label>N&auml;chstes Bild einblenden <b id="v_fade"></b></label><input type="range" id="fade" min="0" max="100" step="5">
+    <label>Bilder pro Sekunde</label><select id="fps"><option>60</option><option>30</option><option>25</option></select>
+    <label class="row" style="margin-top:10px;color:var(--txt)"><input type="checkbox" id="loop" checked> Endlos (letztes Bild zoomt zur&uuml;ck in Bild 1)</label>
+    <button class="big" id="exp">MP4 exportieren</button>
+    <div id="prog"><i></i></div>
+    <div id="msg"></div>
+  </div>
+  <div id="bar">
+    <button id="play">&#9654;</button>
+    <input type="range" id="scrub" min="0" max="1" step="0.001" value="0">
+    <span id="tt" style="color:var(--dim);font-size:12px;width:90px;text-align:right"></span>
+  </div>
+</div>
+<script>
+"use strict";
+var $ = function(id){ return document.getElementById(id); };
+var DEF = { cx:0, cy:0, s:0.08, r:0, feather:18, shape:"oval", br:100, co:100, sa:100, hu:0, pan:0 };
+var G = { W:1920, H:1080, sec:20, ease:0.8, fade:0.5, fps:60, loop:true };
+var items = [];          // {name, el, p:{...DEF}}
+var sel = 0, u = 0, playing = false, exporting = false, cancelExport = false;
+var cv = $("cv"), ctx = cv.getContext("2d", {alpha:false});
+var smallCache = new Map(), bigCache = new Map();
+var STORE = "zoomloop:v1";
+
+/* ---------- Speicher (merkt sich Einstellungen pro Dateiname) ---------- */
+function loadStore(){ try{ return JSON.parse(localStorage.getItem(STORE)) || {}; }catch(e){ return {}; } }
+var saveT = 0;
+function save(){
+  clearTimeout(saveT);
+  saveT = setTimeout(function(){
+    try{
+      var st = loadStore(); st.items = st.items || {};
+      items.forEach(function(it){ st.items[it.name] = it.p; });
+      st.order = items.map(function(it){ return it.name; });
+      st.G = G;
+      localStorage.setItem(STORE, JSON.stringify(st));
+    }catch(e){}
+  }, 300);
+}
+
+/* ---------- Mathe: Aehnlichkeitsabbildung als komplexe Zahl ---------- */
+function mul(a,b){ return [a[0]*b[0]-a[1]*b[1], a[0]*b[1]+a[1]*b[0]]; }
+function div(a,b){ var d=b[0]*b[0]+b[1]*b[1]; return [(a[0]*b[0]+a[1]*b[1])/d, (a[1]*b[0]-a[0]*b[1])/d]; }
+function compose(A,B){ var t=mul(A.m,B.t); return { m:mul(A.m,B.m), t:[A.t[0]+t[0], A.t[1]+t[1]] }; }
+function inverse(A){ var t=div(A.t,A.m); return { m:div([1,0],A.m), t:[-t[0],-t[1]] }; }
+var ID = { m:[1,0], t:[0,0] };
+function place(p,W,H){ var a=p.r*Math.PI/180; return { m:[p.s*Math.cos(a), p.s*Math.sin(a)], t:[p.cx*W, p.cy*H] }; }
+function power(p,W,H,f){
+  var T = place(p,W,H), a = p.r*Math.PI/180*f, sf = Math.pow(p.s,f);
+  var mf = [sf*Math.cos(a), sf*Math.sin(a)];
+  var fix = div(T.t, [1-T.m[0], -T.m[1]]);
+  return { m:mf, t:mul(fix, [1-mf[0], -mf[1]]) };
+}
+function smooth(t){ return t*t*(3-2*t); }
+function clampH(v){ return Math.max(-0.5, Math.min(0.5, v)); }
+
+/* ---------- Ausschnitt: welcher Teil des Fotos ins Format passt ----------
+   pan = -1 ganz links/oben, 0 Mitte, 1 ganz rechts/unten */
+function cropRect(el, ar, pan){
+  var sw = el.naturalWidth, sh = el.naturalHeight, cw = sw, ch = sw/ar;
+  if (ch > sh){ ch = sh; cw = sh*ar; }
+  var o = pan || 0;
+  return [(sw-cw)/2*(1+o), (sh-ch)/2*(1+o), cw, ch];
+}
+function slackOf(it){
+  var R = cropRect(it.el, G.W/G.H, 0);
+  return { x: it.el.naturalWidth-R[2], y: it.el.naturalHeight-R[3] };
+}
+/* eingesetztes Bild bleibt auf seinem Motiv, wenn sich der Ausschnitt des Gastgebers aendert */
+function keepOnMotif(host, kid, arA, panA, arB, panB){
+  var A = cropRect(host.el, arA, panA), B = cropRect(host.el, arB, panB), p = kid.p;
+  var x = A[0]+(0.5+p.cx)*A[2], y = A[1]+(0.5+p.cy)*A[3];
+  p.cx = clampH((x-B[0])/B[2]-0.5);
+  p.cy = clampH((y-B[1])/B[3]-0.5);
+}
+
+/* ---------- Ersatz fuer Safari: Helligkeit/Kontrast/Saettigung/Farbton von Hand rechnen ---------- */
+var HAS_FILTER = "filter" in CanvasRenderingContext2D.prototype;
+function adjustPixels(x, w, h, p){
+  var b = p.br/100, c = p.co/100, s = p.sa/100, a = p.hu*Math.PI/180, co = Math.cos(a), si = Math.sin(a);
+  var S = [0.213+0.787*s, 0.715-0.715*s, 0.072-0.072*s, 0.213-0.213*s, 0.715+0.285*s, 0.072-0.072*s, 0.213-0.213*s, 0.715-0.715*s, 0.072+0.928*s];
+  var R = [0.213+co*0.787-si*0.213, 0.715-co*0.715-si*0.715, 0.072-co*0.072+si*0.928,
+           0.213-co*0.213+si*0.143, 0.715+co*0.285+si*0.140, 0.072-co*0.072-si*0.283,
+           0.213-co*0.213-si*0.787, 0.715-co*0.715+si*0.715, 0.072+co*0.928+si*0.072];
+  var M = [], i, j, k;
+  for (i=0;i<3;i++) for (j=0;j<3;j++){ var v = 0; for (k=0;k<3;k++) v += R[i*3+k]*S[k*3+j]; M.push(v); }
+  var g = b*c, o = 127.5*(1-c), O = [o*(M[0]+M[1]+M[2]), o*(M[3]+M[4]+M[5]), o*(M[6]+M[7]+M[8])];
+  var id = x.getImageData(0,0,w,h), d = id.data;
+  for (i=0;i<d.length;i+=4){
+    var r = d[i]*g, gg = d[i+1]*g, bb = d[i+2]*g;
+    d[i] = M[0]*r+M[1]*gg+M[2]*bb+O[0]; d[i+1] = M[3]*r+M[4]*gg+M[5]*bb+O[1]; d[i+2] = M[6]*r+M[7]*gg+M[8]*bb+O[2];
+  }
+  x.putImageData(id,0,0);
+}
+
+/* ---------- Bild vorbereiten: zuschneiden und angleichen ---------- */
+function bake(it, maxW){
+  var el = it.el, p = it.p, ar = G.W/G.H;
+  var R = cropRect(el, ar, p.pan);
+  var bw = Math.max(64, Math.min(maxW, Math.round(R[2]))), bh = Math.max(2, Math.round(bw/ar));
+  var c = document.createElement("canvas"); c.width = bw; c.height = bh;
+  var x = c.getContext("2d");
+  x.imageSmoothingQuality = "high";
+  var adj = p.br !== 100 || p.co !== 100 || p.sa !== 100 || p.hu !== 0;
+  if (adj && HAS_FILTER) x.filter = "brightness("+p.br+"%) contrast("+p.co+"%) saturate("+p.sa+"%) hue-rotate("+p.hu+"deg)";
+  x.drawImage(el, R[0], R[1], R[2], R[3], 0, 0, bw, bh);
+  if (HAS_FILTER) x.filter = "none"; else if (adj) adjustPixels(x, bw, bh, p);
+  var mips = [c], w = bw, h = bh;
+  while (w > 256){
+    w = w>>1; h = Math.max(1,h>>1);
+    var m = document.createElement("canvas"); m.width = w; m.height = h;
+    var mx = m.getContext("2d"); mx.imageSmoothingQuality = "high";
+    mx.drawImage(mips[mips.length-1],0,0,w,h); mips.push(m);
+  }
+  return mips;
+}
+function getBake(idx, big){
+  var it = items[idx], p = it.p;
+  var key = [it.name,G.W,G.H,p.br,p.co,p.sa,p.hu,p.pan||0].join("|");
+  var cache = big ? bigCache : smallCache, e = cache.get(idx);
+  if (e && e.key === key){ if (big){ cache.delete(idx); cache.set(idx,e); } return e.mips; }
+  e = { key:key, mips:bake(it, big ? 3840 : 1600) };
+  cache.delete(idx); cache.set(idx,e);
+  if (big) while (cache.size > 8) cache.delete(cache.keys().next().value);
+  return e.mips;
+}
+/* weicher Rand wird beim Zeichnen gesetzt: breit, solange das Bild klein ist,
+   und genau dann auf null, wenn es die Flaeche fuellt - so bleibt das ganze Foto sichtbar */
+var tmpC = document.createElement("canvas"), tmpX = tmpC.getContext("2d");
+function softAt(sc, W){ var t = Math.max(0, 1-sc/W); return Math.pow(t,0.35)*smooth(Math.min(1,t/0.05)); }
+function applyMask(x, W, H, p, soft){
+  var F = p.feather/100*soft, st = [0,0.25,0.5,0.75,1], i, g;
+  x.globalCompositeOperation = "destination-in";
+  if (F > 0.002){
+    for (var dir=0; dir<2; dir++){
+      g = dir ? x.createLinearGradient(0,-H/2,0,H/2) : x.createLinearGradient(-W/2,0,W/2,0);
+      for (i=0;i<5;i++) g.addColorStop(F*st[i], "rgba(0,0,0,"+smooth(st[i])+")");
+      for (i=4;i>=0;i--) g.addColorStop(1-F*st[i], "rgba(0,0,0,"+smooth(st[i])+")");
+      x.fillStyle = g; x.fillRect(-W/2,-H/2,W,H);
+    }
+  }
+  if (p.shape === "oval" && soft > 0.002){
+    x.save(); x.scale(W/2,H/2);
+    g = x.createRadialGradient(0,0,Math.max(0,1-2*Math.max(F,0.06)),0,0,1);
+    for (i=0;i<5;i++) g.addColorStop(st[i], "rgba(0,0,0,"+(1-soft*smooth(st[i]))+")");
+    x.fillStyle = g; x.fillRect(-1,-1,2,2); x.restore();
+  }
+  x.globalCompositeOperation = "source-over";
+}
+
+/* ---------- Zeichnen ---------- */
+function segs(){ return items.length < 2 ? 0 : (G.loop ? items.length : items.length-1); }
+function render(c, W, H, uu, big, overlay, noFade){
+  var n = items.length;
+  c.setTransform(1,0,0,1,0,0); c.fillStyle = "#000"; c.fillRect(0,0,W,H);
+  if (!n) return;
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = "high";
+  var k = Math.floor(uu), f = uu-k;
+  if (!G.loop && k >= n-1){ k = n-1; f = 0; }
+  k = ((k%n)+n)%n;
+  function kid(i){ return (G.loop || i < n-1) ? (i+1)%n : -1; }
+  function dad(i){ return (G.loop || i > 0) ? (i-1+n)%n : -1; }
+  var e = f*(1-G.ease) + smooth(f)*G.ease;
+  var F = noFade ? 0 : G.fade;
+  function alphaAt(depth){ if (F <= 0) return 1; var t = depth-e; return t <= 0 ? 1 : Math.max(0, Math.min(1, 1-t/F)); }
+  var draws = [], V = ID;
+  if (n > 1 && kid(k) >= 0) V = inverse(power(items[kid(k)].p, W, H, e));
+  draws.push([k,V,0]);
+  var up = V, i = k, d;
+  for (d=0; d<6 && n>1; d++){ var pa = dad(i); if (pa < 0) break; up = compose(up, inverse(place(items[i].p,W,H))); draws.unshift([pa,up,-d-1]); i = pa; }
+  var dn = V, childV = null; i = k;
+  for (d=0; d<8 && n>1; d++){
+    var ch = kid(i); if (ch < 0) break;
+    dn = compose(dn, place(items[ch].p,W,H));
+    if (d === 0) childV = dn;
+    if (Math.hypot(dn.m[0],dn.m[1])*W < 2 || alphaAt(d+1) <= 0) break;
+    draws.push([ch,dn,d+1]); i = ch;
+  }
+  draws.forEach(function(D){
+    var idx = D[0], T = D[1], A = alphaAt(D[2]);
+    if (A <= 0) return;
+    var p = items[idx].p, mips = getBake(idx, big), sc = Math.hypot(T.m[0],T.m[1])*W, L = 0;
+    while (L+1 < mips.length && mips[L+1].width >= sc) L++;
+    var soft = (G.loop || idx > 0) ? softAt(sc, W) : 0;
+    var oval = p.shape === "oval" && soft > 0.002;
+    if (p.feather/100*soft <= 0.002 && !oval){
+      c.globalAlpha = A;
+      c.setTransform(T.m[0], T.m[1], -T.m[1], T.m[0], T.t[0]+W/2, T.t[1]+H/2);
+      c.drawImage(mips[L], -W/2, -H/2, W, H);
+      return;
+    }
+    if (tmpC.width !== W || tmpC.height !== H){ tmpC.width = W; tmpC.height = H; }
+    tmpX.setTransform(1,0,0,1,0,0); tmpX.globalCompositeOperation = "source-over"; tmpX.globalAlpha = 1;
+    tmpX.clearRect(0,0,W,H); tmpX.imageSmoothingQuality = "high";
+    tmpX.setTransform(T.m[0], T.m[1], -T.m[1], T.m[0], T.t[0]+W/2, T.t[1]+H/2);
+    tmpX.drawImage(mips[L], -W/2, -H/2, W, H);
+    applyMask(tmpX, W, H, p, soft);
+    c.globalAlpha = A; c.setTransform(1,0,0,1,0,0); c.drawImage(tmpC, 0, 0);
+  });
+  c.globalAlpha = 1;
+  if (overlay && childV){
+    var s = Math.hypot(childV.m[0],childV.m[1]);
+    c.setTransform(childV.m[0], childV.m[1], -childV.m[1], childV.m[0], childV.t[0]+W/2, childV.t[1]+H/2);
+    c.lineWidth = 2/s; c.setLineDash([10/s,8/s]); c.strokeStyle = "rgba(217,164,65,.9)";
+    c.strokeRect(-W/2,-H/2,W,H); c.setLineDash([]);
+  }
+  c.setTransform(1,0,0,1,0,0);
+}
+function editing(){ return !playing && !exporting && Math.abs(u-Math.round(u)) < 1e-6; }
+function draw(){
+  render(ctx, cv.width, cv.height, u, false, editing() && $("frame").checked, editing());
+  var S = segs();
+  $("scrub").max = Math.max(S, 0.001); $("scrub").value = u;
+  $("tt").textContent = S ? (u*G.sec).toFixed(1)+" / "+(S*G.sec).toFixed(0)+" s" : "";
+  $("hint").style.display = items.length ? "none" : "";
+}
+
+/* ---------- Ausschnitt-Vorschau: ganzes Foto, Rest abgedunkelt ---------- */
+var PREV_MAXH = 200;
+function prevGeom(it){
+  var c = $("cprev"), sw = it.el.naturalWidth, sh = it.el.naturalHeight;
+  var k = Math.min(c.width/sw, PREV_MAXH/sh), w = sw*k, h = sh*k;
+  return { k:k, w:w, h:h, ox:(c.width-w)/2 };
+}
+function drawCropPrev(){
+  var c = $("cprev"), it = items[sel];
+  if (!it){ c.height = 60; c.getContext("2d").clearRect(0,0,c.width,c.height); return; }
+  var g = prevGeom(it), hh = Math.round(g.h);
+  if (c.height !== hh) c.height = hh;
+  var x = c.getContext("2d");
+  x.clearRect(0,0,c.width,c.height);
+  x.drawImage(it.el, g.ox, 0, g.w, g.h);
+  x.fillStyle = "rgba(0,0,0,.62)"; x.fillRect(g.ox, 0, g.w, g.h);
+  var R = cropRect(it.el, G.W/G.H, it.p.pan);
+  x.drawImage(it.el, R[0], R[1], R[2], R[3], g.ox+R[0]*g.k, R[1]*g.k, R[2]*g.k, R[3]*g.k);
+  x.strokeStyle = "#d9a441"; x.lineWidth = 2;
+  x.strokeRect(g.ox+R[0]*g.k+1, R[1]*g.k+1, R[2]*g.k-2, R[3]*g.k-2);
+}
+function setPan(v){
+  var it = items[sel]; if (!it) return;
+  v = Math.max(-1, Math.min(1, v));
+  var old = it.p.pan || 0; if (Math.abs(v-old) < 1e-6) return;
+  var ch = child(), ar = G.W/G.H;
+  if (ch) keepOnMotif(it, ch, ar, old, ar, v);
+  it.p.pan = v;
+}
+function afterPan(){ stop(); u = Math.min(sel, segs()); syncPanel(); draw(); }
+$("pan").addEventListener("input", function(){ setPan(this.value/100); afterPan(); });
+$("pan").addEventListener("change", function(){ thumbs(); save(); });
+var cdrag = false;
+function panFromPointer(e){
+  var it = items[sel]; if (!it) return;
+  var c = $("cprev"), r = c.getBoundingClientRect(), g = prevGeom(it), sl = slackOf(it);
+  var mx = (e.clientX-r.left)*c.width/r.width, my = (e.clientY-r.top)*c.height/r.height, v;
+  if (sl.x >= sl.y){ if (sl.x < 1) return; v = ((mx-g.ox)/g.k - it.el.naturalWidth/2)/(sl.x/2); }
+  else { if (sl.y < 1) return; v = (my/g.k - it.el.naturalHeight/2)/(sl.y/2); }
+  setPan(v); afterPan();
+}
+$("cprev").addEventListener("pointerdown", function(e){
+  if (exporting || !items[sel]) return;
+  cdrag = true; this.setPointerCapture(e.pointerId); this.style.cursor = "grabbing"; panFromPointer(e);
+});
+$("cprev").addEventListener("pointermove", function(e){ if (cdrag) panFromPointer(e); });
+function endPrevDrag(){ if (!cdrag) return; cdrag = false; $("cprev").style.cursor = ""; thumbs(); save(); }
+$("cprev").addEventListener("pointerup", endPrevDrag);
+$("cprev").addEventListener("pointercancel", endPrevDrag);
+
+/* ---------- Seitenleiste ---------- */
+function child(){ var n = items.length; if (n < 2) return null; if (!G.loop && sel >= n-1) return null; return items[(sel+1)%n]; }
+var PK = ["s","r","feather","shape","br","co","sa","hu"];
+function syncPanel(){
+  var ch = child(), n = items.length, it = items[sel];
+  $("pair").innerHTML = ch ? "Bild "+(sel+1)+" &larr; hier sitzt Bild "+(((sel+1)%n)+1) : (n ? "letztes Bild &ndash; nichts einzusetzen" : "&ndash;");
+  if (it){
+    var sl = slackOf(it), canPan = Math.max(sl.x, sl.y) >= 1, horiz = sl.x >= sl.y;
+    var pv = Math.round((it.p.pan||0)*100);
+    $("cpair").textContent = "Bild "+(sel+1)+(canPan ? "" : " \u2013 passt genau, nichts zu verschieben");
+    $("pan").disabled = !canPan; $("pan").value = pv;
+    $("v_pan").textContent = pv === 0 ? "Mitte" : horiz ? (pv < 0 ? "\u2190 "+(-pv)+" %" : pv+" % \u2192") : (pv < 0 ? "\u2191 "+(-pv)+" %" : pv+" % \u2193");
+  } else {
+    $("cpair").innerHTML = "&ndash;"; $("pan").disabled = true; $("pan").value = 0; $("v_pan").textContent = "";
+  }
+  drawCropPrev();
+  PK.forEach(function(k){
+    var el = $(k); el.disabled = !ch; if (!ch) return;
+    el.value = k === "s" ? ch.p.s*100 : ch.p[k];
+    var v = $("v_"+k); if (v) v.textContent = k==="s" ? Math.round(ch.p.s*100)+" %" : (k==="r"||k==="hu") ? ch.p[k]+"\u00b0" : ch.p[k]+" %";
+  });
+  $("v_sec").textContent = G.sec+" s"; $("v_ease").textContent = Math.round(G.ease*100)+" %";
+  $("v_fade").textContent = G.fade ? Math.round(G.fade*100)+" %" : "aus";
+  $("sec").value = G.sec; $("ease").value = G.ease*100; $("fade").value = G.fade*100; $("fps").value = G.fps; $("loop").checked = G.loop; $("fmt").value = G.W+"x"+G.H;
+}
+PK.forEach(function(k){
+  $(k).addEventListener("input", function(){
+    var ch = child(); if (!ch) return;
+    if (k === "shape") ch.p.shape = this.value; else if (k === "s") ch.p.s = this.value/100; else ch.p[k] = +this.value;
+    stop(); u = sel; syncPanel(); draw(); save();
+  });
+});
+$("reset").onclick = function(){ var ch = child(); if (!ch) return; ch.p = Object.assign({}, DEF, { pan: ch.p.pan||0 }); syncPanel(); draw(); save(); };
+$("frame").onchange = draw;
+$("sec").oninput = function(){ G.sec = +this.value; syncPanel(); draw(); save(); };
+$("ease").oninput = function(){ G.ease = this.value/100; syncPanel(); save(); };
+$("fade").oninput = function(){ G.fade = this.value/100; syncPanel(); draw(); save(); };
+$("fps").onchange = function(){ G.fps = +this.value; save(); };
+$("loop").onchange = function(){ G.loop = this.checked; u = Math.min(u, segs()); syncPanel(); draw(); save(); };
+$("fmt").onchange = function(){
+  var a = this.value.split("x"), nW = +a[0], nH = +a[1];
+  reframe(G.W/G.H, nW/nH);
+  G.W = nW; G.H = nH;
+  fitCanvas(); smallCache.clear(); bigCache.clear(); thumbs(); syncPanel(); draw(); save();
+};
+/* beim Formatwechsel wird jedes Bild anders beschnitten -> Zielpunkte mitrechnen, damit sie aufs Motiv zeigen */
+function reframe(arA, arB){
+  if (!items.length || Math.abs(arA-arB) < 1e-6) return;
+  var n = items.length;
+  items.forEach(function(it, i){
+    if (!G.loop && i === 0) return;
+    var host = items[(i-1+n)%n], pan = host.p.pan||0;
+    keepOnMotif(host, it, arA, pan, arB, pan);
+  });
+}
+function fitCanvas(){ var k = 1280/Math.max(G.W,G.H); cv.width = Math.round(G.W*k); cv.height = Math.round(G.H*k); }
+
+/* ---------- Bilderliste ---------- */
+function thumbs(){
+  var box = $("thumbs"); box.innerHTML = "";
+  items.forEach(function(it, i){
+    var d = document.createElement("div"); d.className = "th"+(i===sel?" sel":"");
+    var n = document.createElement("span"); n.className = "n"; n.textContent = i+1;
+    var c = document.createElement("canvas"); c.width = 160; c.height = Math.round(160*G.H/G.W);
+    var R = cropRect(it.el, G.W/G.H, it.p.pan);
+    c.getContext("2d").drawImage(it.el, R[0], R[1], R[2], R[3], 0, 0, c.width, c.height);
+    var b = document.createElement("div"); b.className = "bt";
+    [["\u25b2",-1],["\u2715",0],["\u25bc",1]].forEach(function(o){
+      var bt = document.createElement("button"); bt.textContent = o[0];
+      bt.onclick = function(ev){
+        ev.stopPropagation();
+        if (o[1] === 0){ items.splice(i,1); sel = Math.max(0, Math.min(sel, items.length-1)); }
+        else { var j = i+o[1]; if (j < 0 || j >= items.length) return; var t = items[i]; items[i] = items[j]; items[j] = t; sel = j; }
+        smallCache.clear(); bigCache.clear(); u = sel; stop(); thumbs(); syncPanel(); draw(); save();
+      };
+      b.appendChild(bt);
+    });
+    d.appendChild(n); d.appendChild(c); d.appendChild(b);
+    d.onclick = function(){ stop(); sel = i; u = Math.min(i, segs()); thumbs(); syncPanel(); draw(); };
+    box.appendChild(d);
+  });
+}
+function addFiles(files){
+  var st = loadStore(), order = st.order || [];
+  var list = Array.prototype.slice.call(files).filter(function(f){ return /^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|avif)$/i.test(f.name); });
+  list.sort(function(a,b){
+    var ia = order.indexOf(a.name), ib = order.indexOf(b.name);
+    if (ia >= 0 && ib >= 0) return ia-ib;
+    return a.name.localeCompare(b.name, undefined, {numeric:true});
+  });
+  var bad = [];
+  return list.reduce(function(chain, f){
+    return chain.then(function(){
+      return new Promise(function(res){
+        var el = new Image();
+        el.onload = function(){ items.push({ name:f.name, el:el, p:Object.assign({}, DEF, (st.items||{})[f.name]||{}) }); res(); };
+        el.onerror = function(){ bad.push(f.name); res(); };
+        el.src = URL.createObjectURL(f);
+      });
+    });
+  }, Promise.resolve()).then(function(){
+    if (bad.length) alert("Konnte ich nicht lesen (HEIC? dann bitte als JPG):\n"+bad.join("\n"));
+    thumbs(); syncPanel(); draw(); save();
+  });
+}
+$("add").onclick = function(){ $("file").click(); };
+$("file").onchange = function(){ addFiles(this.files); this.value = ""; };
+document.addEventListener("dragover", function(e){ e.preventDefault(); });
+document.addEventListener("drop", function(e){ e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+/* ---------- Maus: ziehen = Position, Mausrad = Groesse ---------- */
+var dragging = null;
+cv.addEventListener("mousedown", function(e){
+  if (exporting) return;
+  stop(); var n0 = Math.max(1, items.length), k0 = Math.round(u); u = sel = G.loop ? k0 % n0 : Math.min(k0, n0-1);
+  var ch = child(); thumbs(); syncPanel(); draw(); if (!ch) return;
+  dragging = { x:e.clientX, y:e.clientY, cx:ch.p.cx, cy:ch.p.cy }; cv.classList.add("drag");
+});
+window.addEventListener("mousemove", function(e){
+  if (!dragging) return; var ch = child(); if (!ch) return; var r = cv.getBoundingClientRect();
+  ch.p.cx = clampH(dragging.cx+(e.clientX-dragging.x)/r.width);
+  ch.p.cy = clampH(dragging.cy+(e.clientY-dragging.y)/r.height);
+  draw();
+});
+window.addEventListener("mouseup", function(){ if (dragging){ dragging = null; cv.classList.remove("drag"); save(); } });
+cv.addEventListener("wheel", function(e){
+  e.preventDefault(); if (!editing()) return; var ch = child(); if (!ch) return;
+  ch.p.s = Math.max(0.08, Math.min(0.7, ch.p.s*Math.exp(-e.deltaY*0.0015)));
+  syncPanel(); draw(); save();
+}, {passive:false});
+
+/* ---------- Abspielen ---------- */
+var last = 0;
+function tick(t){
+  if (!playing) return;
+  var S = segs(); if (!S){ stop(); return; }
+  u += (t-last)/1000/G.sec; last = t; if (u >= S) u -= S;
+  draw(); requestAnimationFrame(tick);
+}
+function stop(){ playing = false; $("play").innerHTML = "&#9654;"; }
+$("play").onclick = function(){
+  if (exporting) return;
+  if (playing){ stop(); draw(); return; }
+  if (!segs()) return;
+  playing = true; this.innerHTML = "&#10073;&#10073;"; last = performance.now(); requestAnimationFrame(tick);
+};
+$("scrub").oninput = function(){ stop(); u = +this.value; draw(); };
+
+/* ---------- MP4 ---------- */
+function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+$("exp").onclick = async function(){
+  if (exporting){ cancelExport = true; return; }
+  var S = segs(); if (!S){ $("msg").textContent = "Mindestens zwei Bilder."; return; }
+  if (!("VideoEncoder" in window) || !window.Mp4Muxer){ $("msg").textContent = "Geht nur in Chrome (und mit Internet, fuer den MP4-Baustein)."; return; }
+  var W = G.W, H = G.H, fps = G.fps, total = Math.round(S*G.sec*fps), err = null;
+  var rate = W*H > 1920*1080 ? 45e6 : 16e6;
+
+  /* Speicherort vorher aussuchen: die Datei wird direkt dorthin geschrieben,
+     sonst muesste der ganze Film erst in den Arbeitsspeicher passen */
+  var handle = null, stream = null, target;
+  if (window.showSaveFilePicker){
+    try{
+      handle = await window.showSaveFilePicker({ suggestedName:"zoomloop.mp4",
+        types:[{ description:"Video", accept:{ "video/mp4":[".mp4"] } }] });
+      stream = await handle.createWritable();
+    }catch(e){
+      if (e && e.name === "AbortError"){ $("msg").textContent = "Abgebrochen."; return; }
+      handle = null; stream = null;
+    }
+  }
+  stop(); exporting = true; cancelExport = false; this.textContent = "Abbrechen";
+  $("prog").style.display = "block"; var bar = $("prog").firstElementChild; bar.style.width = "0";
+  $("msg").textContent = "Wird vorbereitet \u2026 (ca. "+Math.round(total/fps*rate/8/1e6)+" MB, "+total+" Bilder)";
+  var done = false;
+  try{
+    var writes = Promise.resolve();
+    target = stream ? new Mp4Muxer.StreamTarget({ chunked:true, chunkSize:4*1024*1024,
+        onData:function(data, position){
+          var copy = data.slice();
+          writes = writes.then(function(){ return stream.write({ type:"write", position:position, data:copy }); });
+        } })
+      : new Mp4Muxer.ArrayBufferTarget();
+    var muxer = new Mp4Muxer.Muxer({ target:target, video:{ codec:"avc", width:W, height:H, frameRate:fps },
+      fastStart: stream ? false : "in-memory" });
+    var oc = document.createElement("canvas"); oc.width = W; oc.height = H;
+    var ox = oc.getContext("2d", {alpha:false});
+    var enc = new VideoEncoder({ output:function(c,m){ muxer.addVideoChunk(c,m); }, error:function(e){ err = e; } });
+    var cfg = { codec:(W*H > 1920*1080 ? "avc1.640033" : "avc1.64002A"), width:W, height:H, bitrate:rate, framerate:fps };
+    var sup = await VideoEncoder.isConfigSupported(cfg);
+    if (!sup.supported) throw new Error("Dieses Format kann dein Browser nicht als MP4 kodieren.");
+    enc.configure(cfg);
+    var t0 = performance.now();
+    for (var i=0; i<total; i++){
+      if (cancelExport || err) break;
+      render(ox, W, H, G.loop ? i/total*S : i/(total-1)*S, true, false, false);
+      var vf = new VideoFrame(oc, { timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps) });
+      enc.encode(vf, { keyFrame: i%(fps*2) === 0 }); vf.close();
+      while (enc.encodeQueueSize > 8) await sleep(4);
+      if (i%4 === 0){
+        bar.style.width = (i/total*100)+"%";
+        var left = Math.ceil((performance.now()-t0)/(i+1)*(total-i)/1000);
+        $("msg").textContent = "Bild "+i+" von "+total+" \u2013 noch ca. "+(left>90 ? Math.ceil(left/60)+" min" : left+" s");
+        document.title = Math.round(i/total*100)+" % \u2013 Zoomloop";
+        await sleep(0);
+      }
+    }
+    if (err) throw err;
+    if (!cancelExport){
+      await enc.flush(); muxer.finalize();
+      if (stream){ await writes; await stream.close(); stream = null; }
+      else {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([target.buffer], {type:"video/mp4"}));
+        a.download = "zoomloop.mp4"; document.body.appendChild(a); a.click(); a.remove();
+      }
+      done = true;
+      $("msg").textContent = handle ? "Fertig: "+handle.name+" ist gespeichert." : "Fertig \u2013 liegt im Download-Ordner.";
+    } else {
+      try{ enc.close(); }catch(e){}
+      $("msg").textContent = "Abgebrochen.";
+    }
+  }catch(e){
+    $("msg").textContent = "Fehler: "+(e.message||e);
+  }
+  if (stream){ try{ await stream.close(); }catch(e){} }
+  document.title = "Zoomloop";
+  bigCache.clear(); exporting = false; this.textContent = "MP4 exportieren"; $("prog").style.display = "none"; draw();
+  if (done) alert($("msg").textContent);
+};
+
+/* ---------- Start ---------- */
+(function(){ var st = loadStore(); if (st.G) Object.assign(G, st.G); fitCanvas(); syncPanel(); draw(); })();
+window.addEventListener("resize", draw);
+</script>
 </body>
 </html>
